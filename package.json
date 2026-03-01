@@ -1,0 +1,26 @@
+{
+  "name": "ams-ai-coder",
+  "version": "1.0.0",
+  "description": "AMS - AI Code Generator with multi-provider support, API key rotation, and intelligent planning",
+  "main": "server/index.js",
+  "bin": {
+    "ams": "./bin/ams.js"
+  },
+  "scripts": {
+    "start": "node bin/ams.js",
+    "dev": "node bin/ams.js --port=6789"
+  },
+  "keywords": [
+    "ai",
+    "code-generator",
+    "openai",
+    "ollama",
+    "openrouter"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.21.0",
+    "open": "^10.1.0",
+    "ws": "^8.18.0"
+  }
+}
