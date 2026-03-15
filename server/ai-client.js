@@ -19,9 +19,10 @@ class AIClient {
    * @param {Array} messages - Conversation messages
    * @param {Array} tools - Tool definitions
    * @param {Function} onToken - Callback for streaming tokens
+   * @param {AbortSignal} signal - Abort signal for cancelling requests
    * @returns {Object} { content, toolCalls }
    */
-  async chat(messages, tools, onToken) {
+  async chat(messages, tools, onToken, signal) {
     const keys = this.provider.apiKeys.filter(k => k && k.trim());
     if (keys.length === 0) {
       throw new Error('No API keys configured for this provider. Please add an API key in Settings.');
@@ -32,8 +33,10 @@ class AIClient {
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
-        return await this._makeRequest(messages, tools, onToken);
+        if (signal?.aborted) throw new Error('Aborted');
+        return await this._makeRequest(messages, tools, onToken, signal);
       } catch (error) {
+        if (error.name === 'AbortError' || error.message === 'Aborted') throw error;
         lastError = error;
         if (this._isRotatableError(error) && attempt < maxRetries - 1) {
           console.log(`[AMS] Key ${this.currentKeyIndex} failed (${error.message}), rotating...`);
@@ -47,7 +50,7 @@ class AIClient {
     throw lastError;
   }
 
-  async _makeRequest(messages, tools, onToken) {
+  async _makeRequest(messages, tools, onToken, signal) {
     const keys = this.provider.apiKeys.filter(k => k && k.trim());
     const apiKey = keys[this.currentKeyIndex % keys.length];
     const baseUrl = this.provider.baseUrl.replace(/\/+$/, '');
@@ -119,7 +122,8 @@ class AIClient {
     const response = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      signal
     });
 
     if (!response.ok) {

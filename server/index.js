@@ -156,7 +156,8 @@ async function handleConversation(ws, config, conversation, fileManager, signal)
         useNativeTools ? tools : null,
         (token) => {
           safeSend(ws, { type: 'token', content: token });
-        }
+        },
+        signal
       );
     } catch (err) {
       // If tool calling is not supported, retry without tools
@@ -168,7 +169,8 @@ async function handleConversation(ws, config, conversation, fileManager, signal)
           null,
           (token) => {
             safeSend(ws, { type: 'token', content: token });
-          }
+          },
+          signal
         );
       } else {
         throw err;
@@ -196,6 +198,9 @@ async function handleConversation(ws, config, conversation, fileManager, signal)
 
       // Execute each tool call
       for (const toolCall of toolCalls) {
+        // Check for stop signal BEFORE each tool execution
+        if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+
         let args;
         try {
           args = JSON.parse(toolCall.function.arguments);
@@ -211,11 +216,14 @@ async function handleConversation(ws, config, conversation, fileManager, signal)
         });
 
         const result = await executeTool(toolCall.function.name, args, fileManager, (output) => {
-          safeSend(ws, {
-            type: 'tool_output',
-            id: toolCall.id,
-            output
-          });
+          // Also check signal during output streaming (though harder to cancel deep tools)
+          if (!signal.aborted) {
+            safeSend(ws, {
+              type: 'tool_output',
+              id: toolCall.id,
+              output
+            });
+          }
         });
 
         safeSend(ws, {

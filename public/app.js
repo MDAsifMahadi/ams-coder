@@ -996,7 +996,10 @@
     // Stop generation
     dom.stopBtn.addEventListener('click', () => {
       wsSend({ type: 'stop' });
-      stopStreaming();
+      // Don't stop streaming UI immediately, wait for server to confirm with 'done' or 'error'
+      // This ensures we don't have UI/Server state mismatch
+      // But we can show a "Stopping" status
+      updateStatusIndicator('Stopping');
     });
 
     // Clear chat
