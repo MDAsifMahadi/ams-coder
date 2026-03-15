@@ -48,6 +48,12 @@ function startServer(projectDir, port) {
     res.json(fileManager.readFile(filePath));
   });
 
+  app.post('/api/file', (req, res) => {
+    const { path: filePath, content } = req.body;
+    if (!filePath) return res.status(400).json({ error: 'path required' });
+    res.json(fileManager.modifyFile(filePath, content));
+  });
+
   // ---------- WebSocket ----------
 
   wss.on('connection', (ws) => {
@@ -178,10 +184,6 @@ async function handleConversation(ws, config, conversation, fileManager, signal)
       if (xmlToolCalls.length > 0) {
         toolCalls = xmlToolCalls;
         responseContent = stripXmlToolCalls(responseContent);
-        // Send the cleaned text content if any
-        if (responseContent && responseContent.trim()) {
-          // Already streamed, but update for conversation history
-        }
       }
     }
 
@@ -208,7 +210,13 @@ async function handleConversation(ws, config, conversation, fileManager, signal)
           args
         });
 
-        const result = await executeTool(toolCall.function.name, args, fileManager);
+        const result = await executeTool(toolCall.function.name, args, fileManager, (output) => {
+          safeSend(ws, {
+            type: 'tool_output',
+            id: toolCall.id,
+            output
+          });
+        });
 
         safeSend(ws, {
           type: 'tool_result',
@@ -218,7 +226,7 @@ async function handleConversation(ws, config, conversation, fileManager, signal)
         });
 
         // Notify frontend to refresh file tree after file mutations
-        if (['create_file', 'modify_file', 'delete_file', 'run_command'].includes(toolCall.function.name)) {
+        if (['create_file', 'modify_file', 'delete_file', 'move_file', 'copy_file', 'run_command'].includes(toolCall.function.name)) {
           safeSend(ws, { type: 'refresh_files' });
         }
 
@@ -243,129 +251,67 @@ async function handleConversation(ws, config, conversation, fileManager, signal)
 
 // ---------- Tool Execution ----------
 
-async function executeTool(name, args, fileManager) {
+async function executeTool(name, args, fileManager, onOutput) {
   switch (name) {
     case 'create_plan':
       return { success: true, title: args.title, steps: args.steps };
-
     case 'create_file':
       return fileManager.createFile(args.path, args.content);
-
     case 'read_file':
       return fileManager.readFile(args.path);
-
     case 'modify_file':
       return fileManager.modifyFile(args.path, args.content);
-
     case 'delete_file':
       return fileManager.deleteFile(args.path);
-
+    case 'move_file':
+      return fileManager.moveFile(args.source, args.destination);
+    case 'copy_file':
+      return fileManager.copyFile(args.source, args.destination);
     case 'list_files':
       return fileManager.listFiles(args.path || '.');
-
     case 'run_command':
-      return fileManager.runCommand(args.command);
-
+      return fileManager.runCommand(args.command, onOutput);
+    case 'search_files':
+      return fileManager.searchFiles(args.query);
     case 'web_search':
-      return await webSearch(args.query);
-
+      return webSearch(args.query);
     case 'fetch_url':
-      return await fetchUrl(args.url);
-
+      return fetchUrl(args.url);
     default:
-      return { success: false, error: `Unknown tool: ${name}` };
+      return { error: `Tool not found: ${name}` };
   }
 }
 
-// ---------- Helpers ----------
-
-function safeSend(ws, data) {
-  if (ws.readyState === 1) {
-    ws.send(JSON.stringify(data));
-  }
-}
+// ---------- Config Helpers ----------
 
 function loadConfig(configPath) {
-  const defaultConfig = {
-    providers: [
-      {
-        id: 'openrouter',
-        name: 'OpenRouter',
-        baseUrl: 'https://openrouter.ai/api/v1',
-        apiKeys: [],
-        models: [
-          'anthropic/claude-sonnet-4',
-          'openai/gpt-4o',
-          'google/gemini-2.0-flash-exp',
-          'deepseek/deepseek-chat',
-          'meta-llama/llama-3.1-70b-instruct'
-        ]
-      },
-      {
-        id: 'ollama-local',
-        name: 'Ollama (Local)',
-        baseUrl: 'http://localhost:11434/v1',
-        apiKeys: ['ollama'],
-        models: [
-          'llama3',
-          'codellama',
-          'deepseek-coder',
-          'qwen2.5-coder',
-          'mistral'
-        ]
-      },
-      {
-        id: 'ollama-cloud',
-        name: 'Ollama (Cloud)',
-        baseUrl: '',
-        apiKeys: [],
-        models: []
-      },
-      {
-        id: 'openai',
-        name: 'OpenAI',
-        baseUrl: 'https://api.openai.com/v1',
-        apiKeys: [],
-        models: [
-          'gpt-4o',
-          'gpt-4o-mini',
-          'gpt-4-turbo',
-          'o1-preview'
-        ]
-      },
-      {
-        id: 'custom',
-        name: 'Custom Provider',
-        baseUrl: '',
-        apiKeys: [],
-        models: []
-      }
-    ],
-    activeProvider: 'openrouter',
-    activeModel: 'anthropic/claude-sonnet-4',
-    temperature: 0.3
-  };
-
-  try {
-    if (fs.existsSync(configPath)) {
-      const raw = fs.readFileSync(configPath, 'utf-8');
-      const saved = JSON.parse(raw);
-      return { ...defaultConfig, ...saved };
-    }
-  } catch {
-    // Corrupted config; return default
+  if (!fs.existsSync(configPath)) {
+    return {
+      providers: [
+        {
+          id: 'ollama',
+          name: 'Ollama (Local)',
+          baseUrl: 'http://localhost:11434/v1',
+          apiKeys: ['ollama'],
+          models: ['codellama', 'llama3', 'mistral', 'qwen2.5-coder']
+        }
+      ],
+      activeProvider: 'ollama',
+      activeModel: 'qwen2.5-coder',
+      temperature: 0.3
+    };
   }
-
-  // Write default config on first run
-  try {
-    fs.writeFileSync(configPath, JSON.stringify(defaultConfig, null, 2), 'utf-8');
-  } catch {}
-
-  return defaultConfig;
+  return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
 }
 
 function saveConfig(configPath, config) {
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+}
+
+function safeSend(ws, msg) {
+  if (ws.readyState === ws.OPEN) {
+    ws.send(JSON.stringify(msg));
+  }
 }
 
 module.exports = { startServer };

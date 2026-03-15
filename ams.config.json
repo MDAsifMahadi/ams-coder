@@ -4,7 +4,9 @@
       "id": "openrouter",
       "name": "OpenRouter",
       "baseUrl": "https://openrouter.ai/api/v1",
-      "apiKeys": [],
+      "apiKeys": [
+        "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"
+      ],
       "models": [
         "anthropic/claude-sonnet-4",
         "openai/gpt-4o",
@@ -26,15 +28,22 @@
         "codellama",
         "deepseek-coder",
         "qwen2.5-coder",
-        "mistral"
+        "ministral-3:3b"
       ]
     },
     {
       "id": "ollama-cloud",
       "name": "Ollama (Cloud)",
-      "baseUrl": "",
-      "apiKeys": [],
-      "models": []
+      "baseUrl": "http://localhost:11434/v1/",
+      "apiKeys": [
+        "ollama"
+      ],
+      "models": [
+        "kimi-k2.5:cloud",
+        "qwen3-coder:480b-cloud",
+        "qwen3.5:397b-cloud",
+        "glm-5:cloud"
+      ]
     },
     {
       "id": "openai",
@@ -51,14 +60,19 @@
     {
       "id": "custom",
       "name": "Custom Provider",
-      "baseUrl": "",
+      "baseUrl": "https://api.a4f.co/v1",
       "apiKeys": [
-        ""
+        "ddc-a4f-8e6480877b1742e0bc25564a4f822389",
+        "ddc-a4f-d25669e182e7455899015a802a2c629c",
+        "ddc-a4f-cb4bded68b5e4e808e8316d15816f1f5"
       ],
-      "models": []
+      "models": [
+        "provider-5/gemini-2.5-flash",
+        "provider-5/gemini-3-pro"
+      ]
     }
   ],
-  "activeProvider": "ollama-local",
-  "activeModel": "llama3",
+  "activeProvider": "ollama-cloud",
+  "activeModel": "glm-5:cloud",
   "temperature": 0.3
 }

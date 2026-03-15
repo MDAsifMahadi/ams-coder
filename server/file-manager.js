@@ -4,7 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, spawn } = require('child_process');
 
 class FileManager {
   constructor(projectDir) {
@@ -85,6 +85,36 @@ class FileManager {
     }
   }
 
+  moveFile(srcPath, destPath) {
+    try {
+      const fullSrc = this._resolvePath(srcPath);
+      const fullDest = this._resolvePath(destPath);
+      const destDir = path.dirname(fullDest);
+      if (!fs.existsSync(destDir)) {
+        fs.mkdirSync(destDir, { recursive: true });
+      }
+      fs.renameSync(fullSrc, fullDest);
+      return { success: true, from: srcPath, to: destPath };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  copyFile(srcPath, destPath) {
+    try {
+      const fullSrc = this._resolvePath(srcPath);
+      const fullDest = this._resolvePath(destPath);
+      const destDir = path.dirname(fullDest);
+      if (!fs.existsSync(destDir)) {
+        fs.mkdirSync(destDir, { recursive: true });
+      }
+      fs.copyFileSync(fullSrc, fullDest);
+      return { success: true, from: srcPath, to: destPath };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  }
+
   listFiles(dirPath = '.') {
     try {
       const fullPath = this._resolvePath(dirPath);
@@ -105,23 +135,87 @@ class FileManager {
     }
   }
 
-  runCommand(command) {
+  runCommand(command, onOutput) {
+    return new Promise((resolve) => {
+      try {
+        const shell = process.platform === 'win32' ? 'powershell.exe' : '/bin/sh';
+        const child = spawn(shell, [process.platform === 'win32' ? '-Command' : '-c', command], {
+          cwd: this.projectDir,
+          shell: true,
+          env: { ...process.env, FORCE_COLOR: '1' }
+        });
+
+        let output = '';
+        let errorOutput = '';
+
+        child.stdout.on('data', (data) => {
+          const str = data.toString();
+          output += str;
+          if (onOutput) onOutput(str);
+        });
+
+        child.stderr.on('data', (data) => {
+          const str = data.toString();
+          errorOutput += str;
+          if (onOutput) onOutput(str);
+        });
+
+        child.on('close', (code) => {
+          if (code === 0) {
+            resolve({ success: true, output: output.trim() });
+          } else {
+            resolve({
+              success: false,
+              error: `Command failed with exit code ${code}`,
+              output: output.trim(),
+              stderr: errorOutput.trim()
+            });
+          }
+        });
+
+        child.on('error', (err) => {
+          resolve({ success: false, error: err.message });
+        });
+      } catch (err) {
+        resolve({ success: false, error: err.message });
+      }
+    });
+  }
+
+  searchFiles(query) {
     try {
-      const output = execSync(command, {
-        cwd: this.projectDir,
-        timeout: 60000,
-        encoding: 'utf-8',
-        maxBuffer: 2 * 1024 * 1024,
-        shell: true
-      });
-      return { success: true, output: output.trim() };
-    } catch (err) {
-      return {
-        success: false,
-        error: err.message,
-        output: (err.stdout || '').trim(),
-        stderr: (err.stderr || '').trim()
+      // Basic grep implementation using Node.js for portability
+      const results = [];
+      const searchInDir = (dir) => {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name);
+          const relPath = path.relative(this.projectDir, fullPath).replace(/\\/g, '/');
+          
+          if (entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === 'package-lock.json') continue;
+          
+          if (entry.isDirectory()) {
+            searchInDir(fullPath);
+          } else {
+            const content = fs.readFileSync(fullPath, 'utf-8');
+            const lines = content.split('\n');
+            lines.forEach((line, i) => {
+              if (line.includes(query)) {
+                results.push({
+                  path: relPath,
+                  line: i + 1,
+                  content: line.trim()
+                });
+              }
+            });
+          }
+        }
       };
+      
+      searchInDir(this.projectDir);
+      return { success: true, query, results: results.slice(0, 50) }; // Limit to 50 results
+    } catch (err) {
+      return { success: false, error: err.message };
     }
   }
 

@@ -6,32 +6,61 @@
   'use strict';
 
   // ---- Markdown & Highlight setup ----
-  marked.setOptions({
-    breaks: true,
-    gfm: true,
-    highlight: function (code, lang) {
-      if (lang && hljs.getLanguage(lang)) {
-        try { return hljs.highlight(code, { language: lang }).value; } catch {}
-      }
-      try { return hljs.highlightAuto(code).value; } catch {}
-      return code;
-    }
-  });
+  function initializeMarkdown() {
+    const markedLib = typeof marked !== 'undefined' ? marked : (window.marked || null);
+    const hljsLib = typeof hljs !== 'undefined' ? hljs : (window.hljs || null);
 
-  // Custom renderer: wrap code blocks with header (language + copy button)
-  const renderer = new marked.Renderer();
-  renderer.code = function (code, lang) {
-    const text = typeof code === 'object' ? code.text : code;
-    const language = (typeof code === 'object' ? code.lang : lang) || '';
-    let highlighted;
-    if (language && hljs.getLanguage(language)) {
-      try { highlighted = hljs.highlight(text, { language }).value; } catch { highlighted = escapeHtml(text); }
-    } else {
-      highlighted = escapeHtml(text);
+    if (!markedLib) {
+      console.error('Marked library not found!');
+      return;
     }
-    return `<pre><div class="code-header"><span>${language || 'code'}</span><button class="code-copy-btn" onclick="window.__amsCopy(this)">Copy</button></div><code class="hljs">${highlighted}</code></pre>`;
+
+    const target = markedLib.marked || markedLib;
+
+    target.setOptions({
+      breaks: true,
+      gfm: true,
+      highlight: function (code, lang) {
+        if (hljsLib && lang && hljsLib.getLanguage(lang)) {
+          try { return hljsLib.highlight(code, { language: lang }).value; } catch {}
+        }
+        if (hljsLib) {
+          try { return hljsLib.highlightAuto(code).value; } catch {}
+        }
+        return code;
+      }
+    });
+
+    const renderer = new target.Renderer();
+    renderer.code = function (code, lang) {
+      const text = typeof code === 'object' ? code.text : code;
+      const language = (typeof code === 'object' ? code.lang : lang) || '';
+      let highlighted;
+      if (hljsLib && language && hljsLib.getLanguage(language)) {
+        try { highlighted = hljsLib.highlight(text, { language }).value; } catch { highlighted = escapeHtml(text); }
+      } else {
+        highlighted = escapeHtml(text);
+      }
+      return `<pre><div class="code-header"><span>${language || 'code'}</span><button class="code-copy-btn" onclick="window.__amsCopy(this)">Copy</button></div><code class="hljs">${highlighted}</code></pre>`;
+    };
+    target.setOptions({ renderer });
+  }
+
+  initializeMarkdown();
+
+  // Global copy helper for code blocks
+  window.__amsCopy = (btn) => {
+    const code = btn.closest('pre').querySelector('code').innerText;
+    navigator.clipboard.writeText(code).then(() => {
+      const originalText = btn.innerText;
+      btn.innerText = 'Copied!';
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.innerText = originalText;
+        btn.classList.remove('copied');
+      }, 2000);
+    });
   };
-  marked.setOptions({ renderer });
 
   // ---- State ----
   let ws = null;
@@ -40,6 +69,9 @@
   let currentStreamEl = null;  // the element receiving streamed tokens
   let streamBuffer = '';        // raw markdown text being built up
   let selectedProviderIdx = 0;
+  let monacoEditor = null;
+  let currentFilePath = null;
+  let isMarkedReady = false;
 
   // Voice recognition state
   let recognition = null;
@@ -89,8 +121,9 @@
     // File viewer
     fileViewerModal: $('#fileViewerModal'),
     closeFileViewer: $('#closeFileViewer'),
+    saveFileBtn: $('#saveFileBtn'),
     fileViewerTitle: $('#fileViewerTitle'),
-    fileViewerCode: $('#fileViewerCode'),
+    monacoEditor: $('#monacoEditor'),
     // Voice controls
     voiceBtn: $('#voiceBtn'),
     voiceLangBtn: $('#voiceLangBtn'),
@@ -109,6 +142,38 @@
     loadFileTree();
     initVoiceRecognition();
     setupLeavePageWarning();
+    initMonaco();
+  }
+
+  function initMonaco() {
+    if (typeof require === 'undefined') return;
+    require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' } });
+    require(['vs/editor/editor.main'], function () {
+      monacoEditor = monaco.editor.create(dom.monacoEditor, {
+        value: '',
+        language: 'javascript',
+        theme: document.documentElement.getAttribute('data-theme') === 'light' ? 'vs' : 'vs-dark',
+        automaticLayout: true,
+        fontSize: 14,
+        minimap: { enabled: false },
+        scrollbar: { vertical: 'auto', horizontal: 'auto' }
+      });
+    });
+  }
+
+  function showToast(message, type = 'info') {
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.innerHTML = `
+      <span class="toast-message">${message}</span>
+    `;
+    const container = $('#toastContainer');
+    container.appendChild(toast);
+
+    setTimeout(() => {
+      toast.classList.add('fade-out');
+      setTimeout(() => toast.remove(), 300);
+    }, 3000);
   }
 
   // ---- Leave Page Warning ----
@@ -272,6 +337,9 @@
       case 'tool_call':
         handleToolCall(msg);
         break;
+      case 'tool_output':
+        handleToolOutput(msg);
+        break;
       case 'tool_result':
         handleToolResult(msg);
         break;
@@ -353,7 +421,7 @@
     `;
     dom.messages.appendChild(div);
     statusIndicatorEl = div;
-    dom.messages.scrollTop = dom.messages.scrollHeight;
+    scrollToBottom();
   }
 
   function updateStatusIndicator(status) {
@@ -396,11 +464,21 @@
   function renderStreamContent() {
     if (!currentStreamEl) return;
     try {
-      currentStreamEl.innerHTML = marked.parse(streamBuffer);
+      const markedLib = typeof marked !== 'undefined' ? marked : (window.marked || null);
+      if (!markedLib) return;
+      
+      const target = markedLib.marked || markedLib;
+      currentStreamEl.innerHTML = target.parse(streamBuffer);
       currentStreamEl.classList.add('streaming-cursor', 'streaming');
       // Scroll to bottom
-      dom.messages.scrollTop = dom.messages.scrollHeight;
-    } catch {}
+      scrollToBottom();
+    } catch (err) {
+      console.error('Marked parse error:', err);
+    }
+  }
+
+  function scrollToBottom() {
+    dom.messages.scrollTop = dom.messages.scrollHeight;
   }
 
   function handleToolCall(msg) {
@@ -443,9 +521,30 @@
     if (msg.name === 'create_plan') {
       appendPlanCard(msg.args);
     } else {
-      appendActionCard(msg.name, msg.args);
+      appendActionCard(msg.name, msg.args, msg.id);
     }
-    dom.messages.scrollTop = dom.messages.scrollHeight;
+    scrollToBottom();
+  }
+
+  function handleToolOutput(msg) {
+    const card = dom.messages.querySelector(`.action-card[data-id="${msg.id}"]`);
+    if (!card) return;
+    
+    let outputEl = card.querySelector('.action-command-output');
+    if (!outputEl) {
+      const pre = document.createElement('pre');
+      pre.className = 'action-command-output';
+      outputEl = document.createElement('code');
+      pre.appendChild(outputEl);
+      card.appendChild(pre);
+      card.classList.add('has-output');
+    }
+    
+    outputEl.textContent += msg.output;
+    // Auto-scroll the output if needed
+    outputEl.parentElement.scrollTop = outputEl.parentElement.scrollHeight;
+    // Scroll global messages
+    scrollToBottom();
   }
 
   function handleToolResult(msg) {
@@ -457,7 +556,7 @@
       }
     }
     // Could update action cards with results here if needed
-    dom.messages.scrollTop = dom.messages.scrollHeight;
+    scrollToBottom();
   }
 
   function handleDone() {
@@ -476,15 +575,37 @@
     if (currentStreamEl) {
       currentStreamEl.classList.remove('streaming-cursor', 'streaming');
       if (streamBuffer) {
-        try { currentStreamEl.innerHTML = marked.parse(streamBuffer); } catch {}
+        try { 
+          const markedLib = typeof marked !== 'undefined' ? marked : (window.marked || null);
+          const hljsLib = typeof hljs !== 'undefined' ? hljs : (window.hljs || null);
+          if (markedLib) {
+            const target = markedLib.marked || markedLib;
+            currentStreamEl.innerHTML = target.parse(streamBuffer);
+          }
+          
+          // Highlight any code blocks
+          if (hljsLib) {
+            currentStreamEl.querySelectorAll('pre code').forEach(block => {
+              try { hljsLib.highlightElement(block); } catch {}
+            });
+          }
+        } catch (err) {
+          console.error('Finalize stream error:', err);
+        }
       }
-      // Highlight any code blocks
-      currentStreamEl.querySelectorAll('pre code').forEach(block => {
-        try { hljs.highlightElement(block); } catch {}
-      });
       currentStreamEl = null;
       streamBuffer = '';
     }
+  }
+
+  function highlightCodeBlocks(container) {
+    if (!container) return;
+    const hljsLib = typeof hljs !== 'undefined' ? hljs : (window.hljs || null);
+    if (!hljsLib) return;
+
+    container.querySelectorAll('pre code').forEach(block => {
+      try { hljsLib.highlightElement(block); } catch {}
+    });
   }
 
   // ---- Message rendering ----
@@ -511,7 +632,7 @@
     
     div.innerHTML = content;
     dom.messages.appendChild(div);
-    dom.messages.scrollTop = dom.messages.scrollHeight;
+    scrollToBottom();
   }
 
   function createAiMessageContainer() {
@@ -550,75 +671,39 @@
     dom.messages.appendChild(div);
   }
 
-  function appendActionCard(name, args) {
+  function appendActionCard(type, args, id) {
     const div = document.createElement('div');
-    let cls = 'command';
-    let icon = '>';
-    let label = name;
-    let hasCodePreview = false;
-    let codeContent = '';
-    let filePath = '';
-
-    switch (name) {
-      case 'create_file':
-        cls = 'file-create';
-        icon = '+';
-        label = `Created: ${args.path || ''}`;
-        hasCodePreview = !!args.content;
-        codeContent = args.content || '';
-        filePath = args.path || '';
-        break;
-      case 'modify_file':
-        cls = 'file-modify';
-        icon = '~';
-        label = `Modified: ${args.path || ''}`;
-        hasCodePreview = !!args.content;
-        codeContent = args.content || '';
-        filePath = args.path || '';
-        break;
-      case 'delete_file':
-        cls = 'file-delete';
-        icon = 'x';
-        label = `Deleted: ${args.path || ''}`;
-        break;
-      case 'read_file':
-        cls = 'file-read';
-        icon = '#';
-        label = `Read: ${args.path || ''}`;
-        break;
-      case 'list_files':
-        cls = 'file-read';
-        icon = '#';
-        label = `Listed: ${args.path || '.'}`;
-        break;
-      case 'run_command':
-        cls = 'command';
-        icon = '$';
-        label = `$ ${args.command || ''}`;
-        break;
-      case 'web_search':
-        cls = 'search';
-        icon = '?';
-        label = `Search: ${args.query || ''}`;
-        break;
-      case 'fetch_url':
-        cls = 'search';
-        icon = '@';
-        label = `Fetch: ${args.url || ''}`;
-        break;
+    div.className = `action-card ${type.replace(/_/g, '-')}`;
+    if (id) div.setAttribute('data-id', id);
+    
+    let icon = '&#9881;';
+    let label = type;
+    
+    switch (type) {
+      case 'create_file': icon = '&#10010;'; label = `Create: ${args.path}`; break;
+      case 'read_file': icon = '&#128269;'; label = `Read: ${args.path}`; break;
+      case 'modify_file': icon = '&#9998;'; label = `Modify: ${args.path}`; break;
+      case 'delete_file': icon = '&#128465;'; label = `Delete: ${args.path}`; break;
+      case 'move_file': icon = '&#10145;'; label = `Move: ${args.source} to ${args.destination}`; break;
+      case 'copy_file': icon = '&#128101;'; label = `Copy: ${args.source} to ${args.destination}`; break;
+      case 'list_files': icon = '&#128193;'; label = `List: ${args.path || '.'}`; break;
+      case 'run_command': icon = '&#62;_'; label = args.command; break;
+      case 'search_files': icon = '&#128269;'; label = `Search: ${args.query}`; break;
+      case 'web_search': icon = '&#127760;'; label = `Search Web: ${args.query}`; break;
+      case 'fetch_url': icon = '&#128196;'; label = `Fetch: ${args.url}`; break;
     }
 
-    div.className = `action-card ${cls}`;
-    
-    if (hasCodePreview) {
-      // Get file extension for syntax highlighting
+    if (args.content && (type === 'create_file' || type === 'modify_file')) {
+      const filePath = args.path || '';
+      const codeContent = args.content || '';
       const ext = filePath.split('.').pop().toLowerCase();
-      const lang = hljs.getLanguage(ext) ? ext : '';
+      const hljsLib = typeof hljs !== 'undefined' ? hljs : (window.hljs || null);
+      const lang = (hljsLib && hljsLib.getLanguage(ext)) ? ext : '';
       
       let highlightedCode;
       try {
-        highlightedCode = lang 
-          ? hljs.highlight(codeContent, { language: lang }).value 
+        highlightedCode = (hljsLib && lang)
+          ? hljsLib.highlight(codeContent, { language: lang }).value 
           : escapeHtml(codeContent);
       } catch {
         highlightedCode = escapeHtml(codeContent);
@@ -659,7 +744,7 @@
     div.className = 'msg-error';
     div.textContent = message;
     dom.messages.appendChild(div);
-    dom.messages.scrollTop = dom.messages.scrollHeight;
+    scrollToBottom();
   }
 
   // ---- File Tree ----
@@ -752,18 +837,57 @@
       const res = await fetch(`/api/file?path=${encodeURIComponent(filePath)}`);
       const data = await res.json();
       if (data.success) {
+        currentFilePath = filePath;
         dom.fileViewerTitle.textContent = name;
-        const ext = name.split('.').pop().toLowerCase();
-        const lang = hljs.getLanguage(ext) ? ext : '';
-        if (lang) {
-          dom.fileViewerCode.innerHTML = hljs.highlight(data.content, { language: lang }).value;
-        } else {
-          dom.fileViewerCode.textContent = data.content;
+        
+        if (monacoEditor) {
+          const ext = name.split('.').pop().toLowerCase();
+          let lang = 'javascript';
+          if (ext === 'py') lang = 'python';
+          else if (ext === 'html') lang = 'html';
+          else if (ext === 'css') lang = 'css';
+          else if (ext === 'json') lang = 'json';
+          else if (ext === 'md') lang = 'markdown';
+          else if (ext === 'ts') lang = 'typescript';
+          
+          monaco.editor.setModelLanguage(monacoEditor.getModel(), lang);
+          monacoEditor.setValue(data.content);
+          
+          // Set theme based on current app theme
+          const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+          monaco.editor.setTheme(isLight ? 'vs' : 'vs-dark');
         }
+        
         dom.fileViewerModal.classList.remove('hidden');
+      } else {
+        showToast(data.error || 'Failed to open file', 'error');
       }
-    } catch {}
+    } catch (err) {
+      showToast('Error opening file: ' + err.message, 'error');
+    }
   }
+
+  async function saveFile() {
+     if (!currentFilePath || !monacoEditor) return;
+     
+     const content = monacoEditor.getValue();
+     try {
+       const response = await fetch('/api/file', {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({ path: currentFilePath, content })
+       });
+       
+       const data = await response.json();
+       if (data.success) {
+         showToast('File saved successfully', 'success');
+       } else {
+         showToast(data.error || 'Failed to save file', 'error');
+       }
+     } catch (err) {
+       showToast('Error saving file: ' + err.message, 'error');
+     }
+   }
 
   // ---- Settings Modal ----
   function showSettingsModal() {
@@ -999,12 +1123,20 @@
       await saveConfigToServer();
       await loadConfig();
       hideSettingsModal();
+      showToast('Settings saved', 'success');
+      // Update monaco theme if changed
+      if (monacoEditor) {
+        const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+        monaco.editor.setTheme(isLight ? 'vs' : 'vs-dark');
+      }
     });
 
     // File viewer
     dom.closeFileViewer.addEventListener('click', () => {
       dom.fileViewerModal.classList.add('hidden');
+      currentFilePath = null;
     });
+    dom.saveFileBtn.addEventListener('click', saveFile);
     dom.fileViewerModal.addEventListener('click', (e) => {
       if (e.target === dom.fileViewerModal) dom.fileViewerModal.classList.add('hidden');
     });
@@ -1019,7 +1151,13 @@
     });
 
     // Theme toggle
-    dom.themeToggle.addEventListener('click', toggleTheme);
+    dom.themeToggle.addEventListener('click', () => {
+      toggleTheme();
+      if (monacoEditor) {
+        const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+        monaco.editor.setTheme(isLight ? 'vs' : 'vs-dark');
+      }
+    });
     
     // Image upload
     dom.imageUploadBtn.addEventListener('click', () => {
