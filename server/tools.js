@@ -68,7 +68,7 @@ function getTools() {
       type: 'function',
       function: {
         name: 'modify_file',
-        description: 'Replace the entire content of an existing file',
+        description: 'Replace the entire content of an existing file. Use this for small files or when rewriting most of the file.',
         parameters: {
           type: 'object',
           properties: {
@@ -82,6 +82,31 @@ function getTools() {
             }
           },
           required: ['path', 'content']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'search_replace',
+        description: 'Replace a specific block of text in a file with new text. Use this for modifying large files to save tokens and time.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: {
+              type: 'string',
+              description: 'Relative file path from project root'
+            },
+            old_str: {
+              type: 'string',
+              description: 'The exact block of text to search for. Must be a unique and contiguous chunk of lines.'
+            },
+            new_str: {
+              type: 'string',
+              description: 'The new text to replace the old_str with.'
+            }
+          },
+          required: ['path', 'old_str', 'new_str']
         }
       }
     },
@@ -232,7 +257,8 @@ function getSystemPrompt() {
 - **create_plan**: Create a step-by-step plan
 - **create_file**: Create/overwrite a file
 - **read_file**: Read a file
-- **modify_file**: Update a file
+- **modify_file**: Update a file (full content)
+- **search_replace**: Update a specific block in a file (recommended for large files)
 - **delete_file**: Delete a file
 - **move_file**: Move/rename a file
 - **copy_file**: Copy a file
@@ -246,6 +272,7 @@ function getSystemPrompt() {
 - Use create_plan FIRST for every new task
 - Use list_files to understand project structure
 - Use read_file before modifying
+- Use search_replace for large files to be more efficient
 - Use run_command for shell operations (npm install, etc.)
 - Use search_files to find code patterns or usages
 - Explain your thinking briefly before each action

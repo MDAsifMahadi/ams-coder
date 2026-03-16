@@ -688,14 +688,15 @@
       case 'copy_file': icon = '&#128101;'; label = `Copy: ${args.source} to ${args.destination}`; break;
       case 'list_files': icon = '&#128193;'; label = `List: ${args.path || '.'}`; break;
       case 'run_command': icon = '&#62;_'; label = args.command; break;
+      case 'search_replace': icon = '&#9998;'; label = `Replace in: ${args.path}`; break;
       case 'search_files': icon = '&#128269;'; label = `Search: ${args.query}`; break;
       case 'web_search': icon = '&#127760;'; label = `Search Web: ${args.query}`; break;
       case 'fetch_url': icon = '&#128196;'; label = `Fetch: ${args.url}`; break;
     }
 
-    if (args.content && (type === 'create_file' || type === 'modify_file')) {
+    if ((args.content || args.new_str) && (type === 'create_file' || type === 'modify_file' || type === 'search_replace')) {
       const filePath = args.path || '';
-      const codeContent = args.content || '';
+      const codeContent = args.content || args.new_str || '';
       const ext = filePath.split('.').pop().toLowerCase();
       const hljsLib = typeof hljs !== 'undefined' ? hljs : (window.hljs || null);
       const lang = (hljsLib && hljsLib.getLanguage(ext)) ? ext : '';

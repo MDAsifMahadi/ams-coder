@@ -269,6 +269,10 @@ async function executeTool(name, args, fileManager, onOutput) {
       return fileManager.readFile(args.path);
     case 'modify_file':
       return fileManager.modifyFile(args.path, args.content);
+
+    case 'search_replace':
+      return fileManager.searchReplace(args.path, args.old_str, args.new_str);
+
     case 'delete_file':
       return fileManager.deleteFile(args.path);
     case 'move_file':

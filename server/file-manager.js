@@ -67,6 +67,81 @@ class FileManager {
     }
   }
 
+  searchReplace(filePath, oldStr, newStr) {
+    try {
+      const fullPath = this._resolvePath(filePath);
+      if (!fs.existsSync(fullPath)) {
+        return { success: false, error: `File not found: ${filePath}` };
+      }
+
+      let content = fs.readFileSync(fullPath, 'utf-8');
+      
+      // Normalize line endings and trim trailing whitespace for comparison
+      const normalize = (str) => str.replace(/\r\n/g, '\n').split('\n').map(line => line.trimEnd()).join('\n');
+      
+      const normalizedContent = normalize(content);
+      const normalizedOldStr = normalize(oldStr);
+
+      if (normalizedOldStr.trim() === '') {
+        return { success: false, error: 'The text to search for (oldStr) cannot be empty.' };
+      }
+
+      // Check for uniqueness in normalized content
+      const firstIndex = normalizedContent.indexOf(normalizedOldStr);
+      if (firstIndex === -1) {
+        return { 
+          success: false, 
+          error: `Could not find the exact text block in ${filePath}. \n\nTIP: Ensure you have copied the code exactly as it appears in the file, including indentation and comments.` 
+        };
+      }
+
+      const lastIndex = normalizedContent.lastIndexOf(normalizedOldStr);
+      if (firstIndex !== lastIndex) {
+        return { 
+          success: false, 
+          error: `The text block you provided matches multiple locations in ${filePath}. Please provide more context (surrounding lines) to make it unique.` 
+        };
+      }
+
+      // To perform the actual replacement while preserving the original whitespace/indentation 
+      // of the parts we are NOT changing, we need to find the match in the original content.
+      // Since we matched normalized strings, we can't easily use original content index.
+      // Strategy: Split into lines and match line by line.
+      
+      const originalLines = content.replace(/\r\n/g, '\n').split('\n');
+      const oldLines = normalizedOldStr.split('\n');
+      
+      let matchLineIndex = -1;
+      for (let i = 0; i <= originalLines.length - oldLines.length; i++) {
+        let match = true;
+        for (let j = 0; j < oldLines.length; j++) {
+          if (originalLines[i + j].trimEnd() !== oldLines[j]) {
+            match = false;
+            break;
+          }
+        }
+        if (match) {
+          matchLineIndex = i;
+          break;
+        }
+      }
+
+      if (matchLineIndex === -1) {
+        // This shouldn't happen if normalizedContent.indexOf worked, but just in case
+        return { success: false, error: 'Internal matching error.' };
+      }
+
+      // Replace the lines
+      originalLines.splice(matchLineIndex, oldLines.length, ...newStr.replace(/\r\n/g, '\n').split('\n'));
+      const newContent = originalLines.join('\n');
+      
+      fs.writeFileSync(fullPath, newContent, 'utf-8');
+      return { success: true, path: filePath, message: `Successfully updated ${oldLines.length} line(s) in ${filePath}` };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  }
+
   deleteFile(filePath) {
     try {
       const fullPath = this._resolvePath(filePath);
